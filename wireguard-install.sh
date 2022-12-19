@@ -92,6 +92,10 @@ TUN needs to be enabled before running this installer."
 	fi
 fi
 
+#get ygg subnet
+yggsubnet= yggdrasilctl getSelf | grep "IPv6 subnet" | awk '{print $3}' | tr "//" " " | awk '{print $1}' | tr -d '\r\n' 
+
+
 new_client_dns () {
 	echo "Select a DNS server for the client:"
 	echo "   1) Current system resolvers"
@@ -156,13 +160,13 @@ new_client_setup () {
 [Peer]
 PublicKey = $(wg pubkey <<< $key)
 PresharedKey = $psk
-AllowedIPs = 10.7.0.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' /etc/wireguard/wg0.conf && echo ", fddd:2c4:2c4:2c4::$octet/128")
+AllowedIPs = 10.7.0.$octet/32$(grep -q '$yggsubnet1' /etc/wireguard/wg0.conf && echo ", $yggsubnet$octet/128")
 # END_PEER $client
 EOF
 	# Create client configuration
 	cat << EOF > ~/"$client".conf
 [Interface]
-Address = 10.7.0.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' /etc/wireguard/wg0.conf && echo ", fddd:2c4:2c4:2c4::$octet/64")
+Address = 10.7.0.$octet/24$(grep -q '$yggsubnet1' /etc/wireguard/wg0.conf && echo ", $yggsubnet$octet/64")
 DNS = $dns
 PrivateKey = $key
 
@@ -394,7 +398,7 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 # ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
 
 [Interface]
-Address = 10.7.0.1/24$([[ -n "$ip6" ]] && echo ", fddd:2c4:2c4:2c4::1/64")
+Address = 10.7.0.1/24$([[ -n "$ip6" ]] && echo ", $yggsubnet1/64")
 PrivateKey = $(wg genkey)
 ListenPort = $port
 
@@ -415,8 +419,10 @@ EOF
 		# reload.
 		firewall-cmd --add-port="$port"/udp
 		firewall-cmd --zone=trusted --add-source=10.7.0.0/24
+		firewall-cmd --zone=trusted --add-source=$yggsubnet/64
 		firewall-cmd --permanent --add-port="$port"/udp
 		firewall-cmd --permanent --zone=trusted --add-source=10.7.0.0/24
+		firewall-cmd --permanent --zone=trusted --add-source=$yggsubnet/64
 		# Set NAT for the VPN subnet
 		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
 		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
@@ -444,7 +450,13 @@ ExecStart=$iptables_path -t nat -A POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -
 ExecStart=$iptables_path -I INPUT -p udp --dport $port -j ACCEPT
 ExecStart=$iptables_path -I FORWARD -s 10.7.0.0/24 -j ACCEPT
 ExecStart=$iptables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+ExecStart=$ip6tables_path -I FORWARD -s $yggsubnet/64 -j ACCEPT
+ExecStart=$ip6tables_path -I FORWARD -d $yggsubnet/64 -j ACCEPT
+ExecStart=$ip6tables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 ExecStop=$iptables_path -t nat -D POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to $ip
+ExecStop=$ip6tables_path -I FORWARD -s $yggsubnet/64 -j ACCEPT
+ExecStop=$ip6tables_path -I FORWARD -d $yggsubnet/64 -j ACCEPT
+ExecStop=$ip6tables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 ExecStop=$iptables_path -D INPUT -p udp --dport $port -j ACCEPT
 ExecStop=$iptables_path -D FORWARD -s 10.7.0.0/24 -j ACCEPT
 ExecStop=$iptables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" > /etc/systemd/system/wg-iptables.service
@@ -611,8 +623,10 @@ else
 					# Using both permanent and not permanent rules to avoid a firewalld reload.
 					firewall-cmd --remove-port="$port"/udp
 					firewall-cmd --zone=trusted --remove-source=10.7.0.0/24
+					firewall-cmd --zone=trusted --remove-source=$yggsubnet/64
 					firewall-cmd --permanent --remove-port="$port"/udp
 					firewall-cmd --permanent --zone=trusted --remove-source=10.7.0.0/24
+					firewall-cmd --permanent --zone=trusted --remove-source=$yggsubnet/64
 					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
 					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
 					if grep -qs 'fddd:2c4:2c4:2c4::1/64' /etc/wireguard/wg0.conf; then
