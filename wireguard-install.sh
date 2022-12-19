@@ -219,24 +219,6 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 		done
 		[[ -z "$public_ip" ]] && public_ip="$get_public_ip"
 	fi
-	# If system has a single IPv6, it is selected automatically
-	if [[ $(ip -6 addr | grep -c 'inet6 [23]') -eq 1 ]]; then
-		ip6=$(ip -6 addr | grep 'inet6 [23]' | cut -d '/' -f 1 | grep -oE '([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}')
-	fi
-	# If system has multiple IPv6, ask the user to select one
-	if [[ $(ip -6 addr | grep -c 'inet6 [23]') -gt 1 ]]; then
-		number_of_ip6=$(ip -6 addr | grep -c 'inet6 [23]')
-		echo
-		echo "Which IPv6 address should be used?"
-		ip -6 addr | grep 'inet6 [23]' | cut -d '/' -f 1 | grep -oE '([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}' | nl -s ') '
-		read -p "IPv6 address [1]: " ip6_number
-		until [[ -z "$ip6_number" || "$ip6_number" =~ ^[0-9]+$ && "$ip6_number" -le "$number_of_ip6" ]]; do
-			echo "$ip6_number: invalid selection."
-			read -p "IPv6 address [1]: " ip6_number
-		done
-		[[ -z "$ip6_number" ]] && ip6_number="1"
-		ip6=$(ip -6 addr | grep 'inet6 [23]' | cut -d '/' -f 1 | grep -oE '([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}' | sed -n "$ip6_number"p)
-	fi
 	echo
 	echo "What port should WireGuard listen to?"
 	read -p "Port [51820]: " port
