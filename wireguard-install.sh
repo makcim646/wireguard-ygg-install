@@ -160,13 +160,13 @@ new_client_setup () {
 [Peer]
 PublicKey = $(wg pubkey <<< $key)
 PresharedKey = $psk
-AllowedIPs = 10.7.0.$octet/32$, $yggsubnet$octet/128
+AllowedIPs = 10.7.0.$octet/32, $yggsubnet$octet/128
 # END_PEER $client
 EOF
 	# Create client configuration
 	cat << EOF > ~/"$client".conf
 [Interface]
-Address = 10.7.0.$octet/24$, $yggsubnet$octet/64
+Address = 10.7.0.$octet/24, $yggsubnet$octet/64
 DNS = $dns
 PrivateKey = $key
 
@@ -189,6 +189,7 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 	fi
 	clear
 	echo 'Welcome to this WireGuard road warrior installer!'
+	echo $yggsubnet
 	# If system has a single IPv4, it is selected automatically. Else, ask the user
 	if [[ $(ip -4 addr | grep inet | grep -vEc '127(\.[0-9]{1,3}){3}') -eq 1 ]]; then
 		ip=$(ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')
@@ -219,7 +220,7 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 		done
 		[[ -z "$public_ip" ]] && public_ip="$get_public_ip"
 	fi
-	echo
+	echo $yggsubnet
 	echo "What port should WireGuard listen to?"
 	read -p "Port [51820]: " port
 	until [[ -z "$port" || "$port" =~ ^[0-9]+$ && "$port" -le 65535 ]]; do
@@ -380,7 +381,7 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 # ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
 
 [Interface]
-Address = 10.7.0.1/24$, $yggsubnet1/64
+Address = 10.7.0.1/24, $yggsubnet1/64
 PrivateKey = $(wg genkey)
 ListenPort = $port
 
