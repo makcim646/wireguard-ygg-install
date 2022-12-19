@@ -101,8 +101,8 @@ new_client_dns () {
 	echo "   1) Current system resolvers"
 	echo "   2) Google"
 	echo "   3) 1.1.1.1"
-	echo "   4) OpenDNS"
-	echo "   5) Quad9"
+	echo "   4) DNS YGG"
+	echo "   5) DNS YGG ans Google"
 	echo "   6) AdGuard"
 	read -p "DNS server [1]: " dns
 	until [[ -z "$dns" || "$dns" =~ ^[1-6]$ ]]; do
@@ -160,13 +160,13 @@ new_client_setup () {
 [Peer]
 PublicKey = $(wg pubkey <<< $key)
 PresharedKey = $psk
-AllowedIPs = 10.7.0.$octet/32$(grep -q '$yggsubnet1' /etc/wireguard/wg0.conf && echo ", $yggsubnet$octet/128")
+AllowedIPs = 10.7.0.$octet/32$, $yggsubnet$octet/128
 # END_PEER $client
 EOF
 	# Create client configuration
 	cat << EOF > ~/"$client".conf
 [Interface]
-Address = 10.7.0.$octet/24$(grep -q '$yggsubnet1' /etc/wireguard/wg0.conf && echo ", $yggsubnet$octet/64")
+Address = 10.7.0.$octet/24$, $yggsubnet$octet/64
 DNS = $dns
 PrivateKey = $key
 
@@ -380,7 +380,7 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 # ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
 
 [Interface]
-Address = 10.7.0.1/24$([[ -n "$ip6" ]] && echo ", $yggsubnet1/64")
+Address = 10.7.0.1/24$, $yggsubnet1/64
 PrivateKey = $(wg genkey)
 ListenPort = $port
 
