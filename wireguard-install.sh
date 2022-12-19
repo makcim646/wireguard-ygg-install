@@ -92,8 +92,7 @@ TUN needs to be enabled before running this installer."
 	fi
 fi
 
-#get ygg subnet
-yggsubnet= yggdrasilctl getSelf | grep "IPv6 subnet" | awk '{print $3}' | tr "//" " " | awk '{print $1}' | tr -d '\r\n' 
+yggsubnet=$(yggdrasilctl getSelf | grep "IPv6 subnet" | awk '{print $3}' | tr "//" " " | awk '{print $1}' | tr -d '\r\n')
 
 
 new_client_dns () {
@@ -132,7 +131,7 @@ new_client_dns () {
 			dns="300:6223::53, 302:7991::53"
 		;;
 		5)
-			dns="8.8.8.8, 300:6223::53"
+			dns="300:6223::53, 8.8.8.8"
 		;;
 		6)
 			dns="94.140.14.14, 94.140.15.15"
@@ -144,6 +143,7 @@ new_client_setup () {
 	# Given a list of the assigned internal IPv4 addresses, obtain the lowest still
 	# available octet. Important to start looking at 2, because 1 is our gateway.
 	octet=2
+	#echo $yggsubnet $octet
 	while grep AllowedIPs /etc/wireguard/wg0.conf | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "$octet"; do
 		(( octet++ ))
 	done
@@ -187,9 +187,8 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 		apt-get update
 		apt-get install -y wget
 	fi
-	clear
+	#clear
 	echo 'Welcome to this WireGuard road warrior installer!'
-	echo $yggsubnet
 	# If system has a single IPv4, it is selected automatically. Else, ask the user
 	if [[ $(ip -4 addr | grep inet | grep -vEc '127(\.[0-9]{1,3}){3}') -eq 1 ]]; then
 		ip=$(ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')
@@ -220,7 +219,6 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 		done
 		[[ -z "$public_ip" ]] && public_ip="$get_public_ip"
 	fi
-	echo $yggsubnet
 	echo "What port should WireGuard listen to?"
 	read -p "Port [51820]: " port
 	until [[ -z "$port" || "$port" =~ ^[0-9]+$ && "$port" -le 65535 ]]; do
@@ -374,6 +372,7 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 	if [[ "$firewall" == "firewalld" ]]; then
 		systemctl enable --now firewalld.service
 	fi
+	gtw=1
 	# Generate wg0.conf
 	cat << EOF > /etc/wireguard/wg0.conf
 # Do not alter the commented lines
@@ -381,10 +380,9 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 # ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
 
 [Interface]
-Address = 10.7.0.1/24, $yggsubnet1/64
+Address = 10.7.0.1/24, $yggsubnet$gtw/64
 PrivateKey = $(wg genkey)
 ListenPort = $port
-
 EOF
 	chmod 600 /etc/wireguard/wg0.conf
 	# Enable net.ipv4.ip_forward for the system
@@ -437,9 +435,9 @@ ExecStart=$ip6tables_path -I FORWARD -s $yggsubnet/64 -j ACCEPT
 ExecStart=$ip6tables_path -I FORWARD -d $yggsubnet/64 -j ACCEPT
 ExecStart=$ip6tables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 ExecStop=$iptables_path -t nat -D POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to $ip
-ExecStop=$ip6tables_path -I FORWARD -s $yggsubnet/64 -j ACCEPT
-ExecStop=$ip6tables_path -I FORWARD -d $yggsubnet/64 -j ACCEPT
-ExecStop=$ip6tables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+ExecStop=$ip6tables_path -D FORWARD -s $yggsubnet/64 -j ACCEPT
+ExecStop=$ip6tables_path -D FORWARD -d $yggsubnet/64 -j ACCEPT
+ExecStop=$ip6tables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 ExecStop=$iptables_path -D INPUT -p udp --dport $port -j ACCEPT
 ExecStop=$iptables_path -D FORWARD -s 10.7.0.0/24 -j ACCEPT
 ExecStop=$iptables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" > /etc/systemd/system/wg-iptables.service
