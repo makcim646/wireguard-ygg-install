@@ -144,7 +144,7 @@ new_client_setup () {
 	# available octet. Important to start looking at 2, because 1 is our gateway.
 	octet=2
 	#echo $yggsubnet $octet
-	while grep AllowedIPs /etc/wireguard/wg0.conf | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "$octet"; do
+	while grep AllowedIPs /etc/wireguard/$SERVER_WG_NIC.conf | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "$octet"; do
 		(( octet++ ))
 	done
 	# Don't break the WireGuard configuration in case the address space is full
@@ -155,7 +155,7 @@ new_client_setup () {
 	key=$(wg genkey)
 	psk=$(wg genpsk)
 	# Configure client in the server
-	cat << EOF >> /etc/wireguard/wg0.conf
+	cat << EOF >> /etc/wireguard/$SERVER_WG_NIC.conf
 # BEGIN_PEER $client
 [Peer]
 PublicKey = $(wg pubkey <<< $key)
@@ -179,7 +179,7 @@ PersistentKeepalive = 25
 EOF
 }
 
-if [[ ! -e /etc/wireguard/wg0.conf ]]; then
+if [[ ! -e /etc/wireguard/params ]]; then
 	# Detect some Debian minimal setups where neither wget nor curl are installed
 	if ! hash wget 2>/dev/null && ! hash curl 2>/dev/null; then
 		echo "Wget is required to use this installer."
@@ -188,6 +188,14 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 		apt-get install -y wget
 	fi
 	#clear
+	
+	if [[  -e /etc/wireguard/wg0.conf ]]; then
+        until [[ ${SERVER_WG_NIC} =~ ^[a-zA-Z0-9_]+$ && ${#SERVER_WG_NIC} -lt 16 ]]; do
+                read -rp "WireGuard interface name: " -e -i wg1 SERVER_WG_NIC
+        done
+	fi
+	SERVER_WG_NIC = "wg0"
+	
 	echo 'Welcome to this WireGuard road warrior installer!'
 	# If system has a single IPv4, it is selected automatically. Else, ask the user
 	if [[ $(ip -4 addr | grep inet | grep -vEc '127(\.[0-9]{1,3}){3}') -eq 1 ]]; then
@@ -374,7 +382,9 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 	fi
 	gtw=1
 	# Generate wg0.conf
-	cat << EOF > /etc/wireguard/wg0.conf
+	if pgrep firewalld; then
+		FIREWALLD_IPV4_ADDRESS=10.7.0.0
+		cat << EOF > /etc/wireguard/$SERVER_WG_NIC.conf
 # Do not alter the commented lines
 # They are used by wireguard-install
 # ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
@@ -383,63 +393,30 @@ Environment=WG_SUDO=1" > /etc/systemd/system/wg-quick@wg0.service.d/boringtun.co
 Address = 10.7.0.1/24, $yggsubnet$gtw/64
 PrivateKey = $(wg genkey)
 ListenPort = $port
+PostUp = firewall-cmd --add-port ${port}/udp && firewall-cmd --add-rich-rule='rule family=ipv4 source address=${FIREWALLD_IPV4_ADDRESS}/24 masquerade'
+PostDown = firewall-cmd --remove-port ${port}/udp && firewall-cmd --remove-rich-rule='rule family=ipv4 source address=${FIREWALLD_IPV4_ADDRESS}/24 masquerade'
 EOF
-	chmod 600 /etc/wireguard/wg0.conf
-	# Enable net.ipv4.ip_forward for the system
-	echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
-	# Enable without waiting for a reboot or service restart
-	echo 1 > /proc/sys/net/ipv4/ip_forward
-	if [[ -n "$ip6" ]]; then
-		# Enable net.ipv6.conf.all.forwarding for the system
-		echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.d/99-wireguard-forward.conf
-		# Enable without waiting for a reboot or service restart
-		echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
-	fi
-	if systemctl is-active --quiet firewalld.service; then
-		# Using both permanent and not permanent rules to avoid a firewalld
-		# reload.
-		firewall-cmd --add-port="$port"/udp
-		firewall-cmd --zone=trusted --add-source=10.7.0.0/24
-		firewall-cmd --zone=trusted --add-source=$yggsubnet/64
-		firewall-cmd --permanent --add-port="$port"/udp
-		firewall-cmd --permanent --zone=trusted --add-source=10.7.0.0/24
-		firewall-cmd --permanent --zone=trusted --add-source=$yggsubnet/64
-		# Set NAT for the VPN subnet
-		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
-		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
 	else
-		# Create a service to set up persistent iptables rules
-		iptables_path=$(command -v iptables)
-		ip6tables_path=$(command -v ip6tables)
-		# nf_tables is not available as standard in OVZ kernels. So use iptables-legacy
-		# if we are in OVZ, with a nf_tables backend and iptables-legacy is available.
-		if [[ $(systemd-detect-virt) == "openvz" ]] && readlink -f "$(command -v iptables)" | grep -q "nft" && hash iptables-legacy 2>/dev/null; then
-			iptables_path=$(command -v iptables-legacy)
-			ip6tables_path=$(command -v ip6tables-legacy)
-		fi
-		echo "[Unit]
-Before=network.target
-[Service]
-Type=oneshot
-ExecStart=$iptables_path -t nat -A POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to $ip
-ExecStart=$iptables_path -I INPUT -p udp --dport $port -j ACCEPT
-ExecStart=$iptables_path -I FORWARD -s 10.7.0.0/24 -j ACCEPT
-ExecStart=$iptables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-ExecStart=$ip6tables_path -I FORWARD -s $yggsubnet/64 -j ACCEPT
-ExecStart=$ip6tables_path -I FORWARD -d $yggsubnet/64 -j ACCEPT
-ExecStart=$ip6tables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-ExecStop=$iptables_path -t nat -D POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to $ip
-ExecStop=$ip6tables_path -D FORWARD -s $yggsubnet/64 -j ACCEPT
-ExecStop=$ip6tables_path -D FORWARD -d $yggsubnet/64 -j ACCEPT
-ExecStop=$ip6tables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-ExecStop=$iptables_path -D INPUT -p udp --dport $port -j ACCEPT
-ExecStop=$iptables_path -D FORWARD -s 10.7.0.0/24 -j ACCEPT
-ExecStop=$iptables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" > /etc/systemd/system/wg-iptables.service
-		echo "RemainAfterExit=yes
-[Install]
-WantedBy=multi-user.target" >> /etc/systemd/system/wg-iptables.service
-		systemctl enable --now wg-iptables.service
+		SERVER_PUB_NIC="$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)"
+		cat << EOF > /etc/wireguard/$SERVER_WG_NIC.conf
+# Do not alter the commented lines
+# They are used by wireguard-install
+# ENDPOINT $([[ -n "$public_ip" ]] && echo "$public_ip" || echo "$ip")
+
+[Interface]
+Address = 10.7.0.1/24, $yggsubnet$gtw/64
+PrivateKey = $(wg genkey)
+ListenPort = $port
+	
+PostUp = iptables -A FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_WG_NIC} -j ACCEPT; iptables -A FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; iptables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE; ip6tables -A FORWARD -i ${SERVER_WG_NIC} -j ACCEPT
+PostDown = iptables -D FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_WG_NIC} -j ACCEPT; iptables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT; iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE; ip6tables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT
+	
+EOF
+
 	fi
+	
+	chmod 600 /etc/wireguard/$SERVER_WG_NIC.conf
+	
 	# Generates the custom client.conf
 	new_client_setup
 	# Enable and start the wg-quick service
@@ -482,6 +459,8 @@ EOF
 	qrencode -t UTF8 < ~/"$client.conf"
 	echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
 	echo
+	#save parqams
+	echo "SERVER_WG_NIC=${SERVER_WG_NIC}" >/etc/wireguard/params
 	# If the kernel module didn't load, system probably had an outdated kernel
 	# We'll try to help, but will not force a kernel upgrade upon the user
 	if [[ ! "$is_container" -eq 0 ]] && ! modprobe -nq wireguard; then
@@ -502,6 +481,7 @@ EOF
 	echo "New clients can be added by running this script again."
 else
 	clear
+	source /etc/wireguard/params
 	echo "WireGuard is already installed."
 	echo
 	echo "Select an option:"
@@ -584,22 +564,6 @@ else
 				read -p "Confirm WireGuard removal? [y/N]: " remove
 			done
 			if [[ "$remove" =~ ^[yY]$ ]]; then
-				port=$(grep '^ListenPort' /etc/wireguard/wg0.conf | cut -d " " -f 3)
-				if systemctl is-active --quiet firewalld.service; then
-					ip=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s 10.7.0.0/24 '"'"'!'"'"' -d 10.7.0.0/24' | grep -oE '[^ ]+$')
-					# Using both permanent and not permanent rules to avoid a firewalld reload.
-					firewall-cmd --remove-port="$port"/udp
-					firewall-cmd --zone=trusted --remove-source=10.7.0.0/24
-					firewall-cmd --zone=trusted --remove-source=$yggsubnet/64
-					firewall-cmd --permanent --remove-port="$port"/udp
-					firewall-cmd --permanent --zone=trusted --remove-source=10.7.0.0/24
-					firewall-cmd --permanent --zone=trusted --remove-source=$yggsubnet/64
-					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
-					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to "$ip"
-				else
-					systemctl disable --now wg-iptables.service
-					rm -f /etc/systemd/system/wg-iptables.service
-				fi
 				systemctl disable --now wg-quick@wg0.service
 				rm -f /etc/systemd/system/wg-quick@wg0.service.d/boringtun.conf
 				rm -f /etc/sysctl.d/99-wireguard-forward.conf
